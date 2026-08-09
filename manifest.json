@@ -1,0 +1,11 @@
+{
+  "id": "working-tabs",
+  "name": "Working tabs",
+  "version": "0.1.0",
+  "minAppVersion": "1.7.2",
+  "description": "Group open tabs into named, switchable spaces you can tuck away and complete when the work is done.",
+  "author": "notenerd",
+  "authorUrl": "",
+  "fundingUrl": "",
+  "isDesktopOnly": false
+}

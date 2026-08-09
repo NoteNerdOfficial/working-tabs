@@ -1,0 +1,440 @@
+.working-tabs-view {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+
+.working-tabs-info-icon {
+	display: inline-flex;
+	align-items: center;
+	color: var(--text-faint);
+	cursor: default;
+}
+
+.working-tabs-info-icon svg {
+	width: 14px;
+	height: 14px;
+}
+
+.working-tabs-info-icon:hover {
+	color: var(--text-muted);
+}
+
+.working-tabs-search-input {
+	display: block;
+	width: 100%;
+	box-sizing: border-box;
+	margin: 0;
+	padding: 6px 10px;
+	font-size: 12.5px;
+	color: var(--text-normal);
+	background-color: var(--background-primary);
+	border: none;
+	border-bottom: 1px solid var(--background-modifier-border);
+	border-radius: 0;
+}
+
+.working-tabs-search-input:focus {
+	outline: none;
+	border-bottom-color: var(--interactive-accent, #7c6ff0);
+}
+
+.working-tabs-tree {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	padding: 4px 6px 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.working-tabs-tree:focus {
+	outline: none;
+}
+
+.working-tabs-empty {
+	padding: 12px;
+	color: var(--text-faint);
+	font-size: 12px;
+	font-style: italic;
+}
+
+.working-tabs-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 8px;
+	border-radius: 7px;
+	cursor: pointer;
+	position: relative;
+}
+
+/* The whole row is the drag handle -- no separate grip affordance. */
+.working-tabs-row[draggable='true']:active {
+	cursor: grabbing;
+}
+
+.working-tabs-row:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.working-tabs-row.is-focused {
+	box-shadow: inset 0 0 0 1px var(--interactive-accent, #7c6ff0);
+}
+
+.working-tabs-children {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.working-tabs-chevron {
+	flex: 0 0 auto;
+	color: var(--text-muted);
+	font-size: 14px;
+	width: 14px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.working-tabs-title {
+	/* Shrinks (and ellipsizes) under space pressure, but doesn't grow to fill
+	   unused space -- so a count badge placed right after it sits snug next
+	   to the text instead of being pushed to the far edge of the row. */
+	flex: 0 1 auto;
+	min-width: 0;
+	color: var(--text-normal);
+	font-size: 13px;
+	font-weight: 500;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.working-tabs-tab-row .working-tabs-title {
+	font-weight: 400;
+}
+
+/* "Wrap to multiple lines" setting -- overrides the ellipsis/nowrap default above. */
+.working-tabs-wrap-titles .working-tabs-title {
+	white-space: normal;
+	overflow: visible;
+	text-overflow: clip;
+	word-break: break-word;
+}
+
+.working-tabs-wrap-titles .working-tabs-title-row {
+	align-items: flex-start;
+}
+
+.working-tabs-title.is-done {
+	color: var(--text-faint);
+	text-decoration: line-through;
+}
+
+.working-tabs-section-header .working-tabs-title,
+.working-tabs-synthetic-title {
+	font-size: 12px;
+	font-weight: 600;
+}
+
+/* Real (user-created) sections get a divider above them so they read as a
+   distinct break in the list, not just another group -- the synthetic
+   Completed bucket is excluded since it already has its own divider. */
+.working-tabs-section:not(.working-tabs-synthetic-section) {
+	border-top: 1px solid var(--background-modifier-border);
+	padding-top: 4px;
+	margin-top: 4px;
+}
+
+.working-tabs-text-col {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+
+/* flex: 0 0 auto so this row doesn't stretch vertically inside text-col's
+   column stacking -- the title inside it still shrinks/ellipsizes normally,
+   since that's a separate (horizontal) axis concern. */
+.working-tabs-title-row {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: baseline;
+	gap: 6px;
+	min-width: 0;
+}
+
+.working-tabs-description {
+	font-size: 11px;
+	color: var(--text-faint);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.working-tabs-count {
+	flex: 0 0 auto;
+	font-size: 11px;
+	color: var(--text-faint);
+	background-color: var(--background-modifier-border);
+	border-radius: 10px;
+	padding: 0 6px;
+	line-height: 16px;
+	min-width: 16px;
+	text-align: center;
+}
+
+/* A group's pane is currently open. */
+.working-tabs-group-header.is-live .working-tabs-title {
+	color: var(--interactive-accent, #7c6ff0);
+}
+
+/* Marked "tucked away" -- sidebar-only, doesn't touch the real pane. */
+.working-tabs-group-header.is-hidden-pane {
+	opacity: 0.55;
+}
+
+/* Always in the DOM (for keyboard/touch access) but only visually revealed
+   on hover. margin-left: auto pushes it to the row's right edge regardless
+   of how short the title+count on the left are. */
+.working-tabs-row-actions {
+	flex: 0 0 auto;
+	display: flex;
+	gap: 6px;
+	margin-left: auto;
+	opacity: 0;
+}
+
+.working-tabs-row:hover .working-tabs-row-actions,
+.working-tabs-row:focus-within .working-tabs-row-actions {
+	opacity: 1;
+}
+
+.working-tabs-action-btn {
+	width: 22px;
+	height: 22px;
+	border-radius: 5px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.working-tabs-action-btn svg {
+	width: 16px;
+	height: 16px;
+}
+
+.working-tabs-action-btn:hover {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-border);
+}
+
+.working-tabs-done-checkbox {
+	flex: 0 0 auto;
+	margin: 2px 0 0;
+	cursor: pointer;
+}
+
+.working-tabs-rename-input {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text-normal);
+	background-color: var(--background-primary);
+	border: 1px solid var(--interactive-accent, #7c6ff0);
+	border-radius: 4px;
+	padding: 1px 4px;
+}
+
+/* Separates everything live (above) from the Completed archive (below),
+   Workona-style. The top edge of the panel needs no divider of its own --
+   the search input's border-bottom already marks it. */
+.working-tabs-divider {
+	height: 1px;
+	background-color: var(--background-modifier-border);
+	margin: 6px 4px;
+	flex: 0 0 auto;
+}
+
+/* The "+ New group" / "+ Create a section" pair, sitting between the groups
+   block and the sections block. */
+.working-tabs-new-group-row .working-tabs-title,
+.working-tabs-create-section-row .working-tabs-title {
+	color: var(--text-muted);
+	font-weight: 400;
+}
+
+.working-tabs-new-group-row:hover .working-tabs-title,
+.working-tabs-create-section-row:hover .working-tabs-title {
+	color: var(--text-normal);
+}
+
+/* Same divider treatment real sections get, since this row heads their
+   block -- and the first section then drops its own so the two lines don't
+   stack up with a single row between them. */
+.working-tabs-create-section-row {
+	border-top: 1px solid var(--background-modifier-border);
+	padding-top: 8px;
+	margin-top: 4px;
+}
+
+.working-tabs-create-section-row + .working-tabs-section:not(.working-tabs-synthetic-section) {
+	border-top: none;
+	padding-top: 0;
+	margin-top: 0;
+}
+
+.working-tabs-done-toggle {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 8px;
+	font-size: 11px;
+	color: var(--text-faint);
+	cursor: pointer;
+	border-radius: 6px;
+}
+
+.working-tabs-done-toggle:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-muted);
+}
+
+/*
+ * "Hide pane" -- ported from Vertical Tabs' own proven approach (same idea,
+ * different class name so the two plugins never collide if both installed):
+ * hide the specific pane, then let a *declarative* CSS `:has()` selector
+ * cascade the collapse up through however many nested splits are affected,
+ * rather than us walking the DOM in JavaScript to replicate that (which is
+ * what corrupted an unrelated pane's sizing in an earlier attempt here).
+ * `:has()` re-evaluates on its own whenever the DOM changes, so there's no
+ * JS state (snapshotted flex values, etc.) that can drift out of sync with
+ * reality -- the failure mode that caused that corruption.
+ */
+body:not(.is-phone) .workspace-split.mod-root .workspace-tabs.working-tabs-hidden-pane {
+	display: none;
+}
+body:not(.is-phone) .workspace-split.mod-root .workspace-split {
+	/* Hidden by default, to collapse any split left with nothing visible in it. */
+	display: none;
+}
+body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-tabs:not(.working-tabs-hidden-pane)) {
+	display: flex;
+}
+body:not(.is-phone) .workspace-split.mod-root .workspace-split:not(:has(.workspace-tabs)) {
+	/* A split with no workspace-tabs at all belongs to some other plugin's
+	   own container (e.g. a canvas or embed) -- always show it. */
+	display: flex;
+}
+
+/* Dragging a dormant group from the sidebar onto a pane in the main
+   workspace -- see TabSpacesView.registerWorkspaceDropZones. Each pane
+   (.workspace-tabs) needs a positioning context for the zone overlay below;
+   scoped to only apply while a zone class is present, so it doesn't affect
+   layout the rest of the time. */
+.workspace-tabs.working-tabs-pane-drop-top,
+.workspace-tabs.working-tabs-pane-drop-bottom,
+.workspace-tabs.working-tabs-pane-drop-left,
+.workspace-tabs.working-tabs-pane-drop-right,
+.workspace-tabs.working-tabs-pane-drop-center {
+	position: relative;
+}
+
+.workspace-tabs.working-tabs-pane-drop-top::after,
+.workspace-tabs.working-tabs-pane-drop-bottom::after,
+.workspace-tabs.working-tabs-pane-drop-left::after,
+.workspace-tabs.working-tabs-pane-drop-right::after,
+.workspace-tabs.working-tabs-pane-drop-center::after {
+	content: '';
+	position: absolute;
+	z-index: var(--layer-popover);
+	pointer-events: none;
+	background-color: var(--interactive-accent, #7c6ff0);
+	border: 2px solid var(--interactive-accent, #7c6ff0);
+	opacity: 0.25;
+	border-radius: 4px;
+}
+
+.working-tabs-pane-drop-top::after {
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 25%;
+}
+
+.working-tabs-pane-drop-bottom::after {
+	bottom: 0;
+	left: 0;
+	right: 0;
+	height: 25%;
+}
+
+.working-tabs-pane-drop-left::after {
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 25%;
+}
+
+.working-tabs-pane-drop-right::after {
+	top: 0;
+	bottom: 0;
+	right: 0;
+	width: 25%;
+}
+
+.working-tabs-pane-drop-center::after {
+	top: 10%;
+	bottom: 10%;
+	left: 10%;
+	right: 10%;
+	border-radius: 8px;
+}
+
+/* Drag affordance and drop indicators */
+
+.working-tabs-dragging {
+	opacity: 0.5;
+}
+
+.working-tabs-drop-before::before,
+.working-tabs-drop-after::after {
+	content: '';
+	position: absolute;
+	left: 8px;
+	right: 8px;
+	height: 2px;
+	border-radius: 1px;
+	background-color: var(--interactive-accent, #7c6ff0);
+}
+
+.working-tabs-drop-before::before {
+	top: 0;
+}
+
+.working-tabs-drop-after::after {
+	bottom: 0;
+}
+
+.working-tabs-drop-into {
+	background-color: var(--background-modifier-border);
+	outline: 1px solid var(--interactive-accent, #7c6ff0);
+	outline-offset: -1px;
+}
+
+/* "Hide tab bar" setting -- scoped to `.mod-root` (Obsidian's own class for
+   the main/center split, as opposed to `.mod-left-split`/`.mod-right-split`
+   for the sidebar docks) so it only ever touches note-tab headers in the
+   first place. Hiding broadly and then trying to restore the sidebar's own
+   pane-switcher row (same element class, different use) shifted its
+   position by a couple pixels -- scoping up front avoids touching the
+   sidebar's DOM at all, not just hiding it differently. */
+body.working-tabs-hide-tab-headers .mod-root .workspace-tab-header-container {
+	display: none;
+}
