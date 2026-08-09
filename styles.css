@@ -116,7 +116,9 @@
 	font-weight: 400;
 }
 
-/* "Wrap to multiple lines" setting -- overrides the ellipsis/nowrap default above. */
+/* "Wrap to multiple lines" setting -- overrides the ellipsis/nowrap default above.
+   Descriptions wrap alongside titles (see rule further down) so a row's two
+   lines of text stay consistent. */
 .working-tabs-wrap-titles .working-tabs-title {
 	white-space: normal;
 	overflow: visible;
@@ -173,6 +175,13 @@
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+
+.working-tabs-wrap-titles .working-tabs-description {
+	white-space: normal;
+	overflow: visible;
+	text-overflow: clip;
+	word-break: break-word;
 }
 
 .working-tabs-count {

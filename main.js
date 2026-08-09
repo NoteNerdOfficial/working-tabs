@@ -2022,7 +2022,7 @@ var TabSpacesSettingTab = class extends import_obsidian5.PluginSettingTab {
       },
       {
         name: "Long titles",
-        desc: "How to handle tab and group titles too long to fit on one line.",
+        desc: "How to handle tab and group titles (and their descriptions) too long to fit on one line.",
         control: {
           type: "dropdown",
           key: "titleOverflow",
@@ -2053,7 +2053,7 @@ var TabSpacesSettingTab = class extends import_obsidian5.PluginSettingTab {
         await this.plugin.store.updateSettings({ confirmBeforeComplete: value });
       })
     );
-    new import_obsidian5.Setting(containerEl).setName("Long titles").setDesc("How to handle tab and group titles too long to fit on one line.").addDropdown((dropdown) => {
+    new import_obsidian5.Setting(containerEl).setName("Long titles").setDesc("How to handle tab and group titles (and their descriptions) too long to fit on one line.").addDropdown((dropdown) => {
       for (const [key, label] of Object.entries(TITLE_OVERFLOW_OPTIONS))
         dropdown.addOption(key, label);
       dropdown.setValue(this.plugin.store.settings.titleOverflow).onChange(async (value) => {

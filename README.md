@@ -56,7 +56,7 @@ Hiding matters here specifically because it doesn't close anything — the pane 
 | Setting | Description |
 |---|---|
 | Confirm before completing a group | Ask before marking a group done. Turn off once you trust it — completed groups can still be restored |
-| Long titles | Truncate with an ellipsis, or wrap to multiple lines |
+| Long titles | Truncate titles and descriptions with an ellipsis, or wrap them to multiple lines |
 | Hide tab bar | Hide Obsidian's native tab-header row across every pane, for a cleaner look |
 
 ## Installation

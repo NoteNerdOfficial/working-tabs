@@ -25,7 +25,7 @@ export class TabSpacesSettingTab extends PluginSettingTab {
 			},
 			{
 				name: 'Long titles',
-				desc: 'How to handle tab and group titles too long to fit on one line.',
+				desc: 'How to handle tab and group titles (and their descriptions) too long to fit on one line.',
 				control: {
 					type: 'dropdown',
 					key: 'titleOverflow',
@@ -66,7 +66,7 @@ export class TabSpacesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Long titles')
-			.setDesc('How to handle tab and group titles too long to fit on one line.')
+			.setDesc('How to handle tab and group titles (and their descriptions) too long to fit on one line.')
 			.addDropdown((dropdown) => {
 				for (const [key, label] of Object.entries(TITLE_OVERFLOW_OPTIONS)) dropdown.addOption(key, label);
 				dropdown.setValue(this.plugin.store.settings.titleOverflow).onChange(async (value) => {
