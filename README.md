@@ -3,7 +3,7 @@
 Your open tabs, organized by what you're working on *right now* — not by folder, and not by layout. Inspired by Workona, built for Obsidian.
 
 <p align="center">
-  <img src="docs/demo.gif" width="840" alt="The Working tabs sidebar beside three Obsidian panes. Tabs are checked off one at a time until the group completes itself into Completed, then a new section is created, renamed, and groups are dragged into it.">
+  <img src="docs/demo.gif" width="840" alt="The Working tabs sidebar beside three Obsidian panes. Groups are browsed and their tabs focused, then checked off one at a time until a group completes itself into Completed; a new section is created, renamed, and groups are dragged into it.">
 </p>
 
 **Colour-code your groups and sections too.** Every one is auto-assigned a colour, drawn as a stripe down its pane's left edge and a matching bar on its sidebar row — so you can tell at a glance which pane belongs where. File a group into a section and it takes on that section's colour.
