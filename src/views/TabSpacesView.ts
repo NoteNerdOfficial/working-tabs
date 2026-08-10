@@ -128,7 +128,10 @@ export class TabSpacesView extends ItemView {
 			}
 			parentId = parent.parentId;
 		}
-		this.setFocus(node.id);
+		// Highlight only -- this runs off active-leaf-change, i.e. in response
+		// to the user focusing something in the workspace, so it must leave the
+		// keyboard exactly where they just put it.
+		this.setFocus(node.id, { takeKeyboardFocus: false });
 	}
 
 	private clearSearch(): void {
@@ -535,14 +538,27 @@ export class TabSpacesView extends ItemView {
 
 	// ── Keyboard navigation ──────────────────────────────────
 
-	private setFocus(id: string): void {
+	/**
+	 * Marks a row as the keyboard-navigation cursor and scrolls it into view.
+	 *
+	 * `takeKeyboardFocus` is what separates "the user is driving this panel"
+	 * from "this panel is reflecting something that happened elsewhere". Moving
+	 * DOM focus to the tree is right for the first -- a click on a row, an
+	 * arrow key -- and actively harmful for the second: highlighting the row
+	 * for whichever leaf just became active is a *response* to the user
+	 * focusing something else in the workspace, so stealing the keyboard back
+	 * takes it away from the thing they just deliberately clicked into. A
+	 * terminal is where that's felt hardest, since a pane that has lost focus
+	 * looks identical to one that is simply refusing to accept typing.
+	 */
+	private setFocus(id: string, { takeKeyboardFocus = true }: { takeKeyboardFocus?: boolean } = {}): void {
 		const prevId = this.focusedId;
 		this.focusedId = id;
 		if (prevId) this.treeEl.querySelector<HTMLElement>(`[data-node-id="${prevId}"]`)?.removeClass('is-focused');
 		const el = this.treeEl.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
 		el?.addClass('is-focused');
 		el?.scrollIntoView({ block: 'nearest' });
-		this.treeEl.focus();
+		if (takeKeyboardFocus) this.treeEl.focus();
 	}
 
 	private moveFocus(delta: number): void {

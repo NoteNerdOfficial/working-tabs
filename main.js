@@ -1456,7 +1456,7 @@ var TabSpacesView = class extends import_obsidian4.ItemView {
       }
       parentId = parent.parentId;
     }
-    this.setFocus(node.id);
+    this.setFocus(node.id, { takeKeyboardFocus: false });
   }
   clearSearch() {
     if (!this.searchQuery)
@@ -1807,7 +1807,20 @@ var TabSpacesView = class extends import_obsidian4.ItemView {
     await this.store.remove(node.id);
   }
   // ── Keyboard navigation ──────────────────────────────────
-  setFocus(id) {
+  /**
+   * Marks a row as the keyboard-navigation cursor and scrolls it into view.
+   *
+   * `takeKeyboardFocus` is what separates "the user is driving this panel"
+   * from "this panel is reflecting something that happened elsewhere". Moving
+   * DOM focus to the tree is right for the first -- a click on a row, an
+   * arrow key -- and actively harmful for the second: highlighting the row
+   * for whichever leaf just became active is a *response* to the user
+   * focusing something else in the workspace, so stealing the keyboard back
+   * takes it away from the thing they just deliberately clicked into. A
+   * terminal is where that's felt hardest, since a pane that has lost focus
+   * looks identical to one that is simply refusing to accept typing.
+   */
+  setFocus(id, { takeKeyboardFocus = true } = {}) {
     var _a;
     const prevId = this.focusedId;
     this.focusedId = id;
@@ -1816,7 +1829,8 @@ var TabSpacesView = class extends import_obsidian4.ItemView {
     const el = this.treeEl.querySelector(`[data-node-id="${id}"]`);
     el == null ? void 0 : el.addClass("is-focused");
     el == null ? void 0 : el.scrollIntoView({ block: "nearest" });
-    this.treeEl.focus();
+    if (takeKeyboardFocus)
+      this.treeEl.focus();
   }
   moveFocus(delta) {
     if (this.visibleOrder.length === 0)
