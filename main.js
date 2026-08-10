@@ -63,6 +63,8 @@ var LEGACY_UNSORTED_PARENT_ID = "__unsorted__";
 var TabSpacesStore = class {
   constructor(plugin) {
     this.listeners = [];
+    this.batchDepth = 0;
+    this.batchPending = false;
     this.plugin = plugin;
     this.data = { items: [], settings: { ...DEFAULT_SETTINGS } };
   }
@@ -164,7 +166,40 @@ var TabSpacesStore = class {
     await this.save();
     this.notify();
   }
+  /**
+   * Collapses every mutation made inside `fn` into a single disk write and a
+   * single change notification.
+   *
+   * Each mutator below ends in `save(); notify()`, which is right for a lone
+   * user action but pathological for a reconcile pass: that walks every open
+   * tab and can call syncTitle/syncViewState/setOrder on each, so an N-tab
+   * workspace paid N full `saveData()` serializations of the entire store
+   * plus N full sidebar re-renders -- all synchronous, all on the same main
+   * thread that xterm.js needs to accept keystrokes and paint. Batching turns
+   * that back into one of each.
+   *
+   * Re-entrant (depth-counted) because reconcile's helpers call each other,
+   * and flushed in a `finally` so a throw mid-pass still persists whatever
+   * already changed rather than silently dropping it.
+   */
+  async batch(fn) {
+    this.batchDepth++;
+    try {
+      return await fn();
+    } finally {
+      this.batchDepth--;
+      if (this.batchDepth === 0 && this.batchPending) {
+        this.batchPending = false;
+        await this.plugin.saveData(this.data);
+        this.notify();
+      }
+    }
+  }
   async save() {
+    if (this.batchDepth > 0) {
+      this.batchPending = true;
+      return;
+    }
     await this.plugin.saveData(this.data);
   }
   onChange(listener) {
@@ -174,6 +209,10 @@ var TabSpacesStore = class {
     };
   }
   notify() {
+    if (this.batchDepth > 0) {
+      this.batchPending = true;
+      return;
+    }
     for (const listener of this.listeners)
       listener();
   }
@@ -488,16 +527,53 @@ function isBlankTab(tab) {
   const type = (_a = tab.viewState) == null ? void 0 : _a.type;
   return !type || type === "empty";
 }
+var MAX_VIEW_STATE_VALUE_CHARS = 8 * 1024;
+var VIEW_STATE_POLL_INTERVAL_MS = 3e4;
+function trimViewState(viewState) {
+  const state = viewState.state;
+  if (!state || typeof state !== "object")
+    return viewState;
+  let oversized = null;
+  for (const [key, value] of Object.entries(state)) {
+    if (typeof value === "string" && value.length > MAX_VIEW_STATE_VALUE_CHARS)
+      (oversized != null ? oversized : oversized = []).push(key);
+  }
+  if (!oversized)
+    return viewState;
+  const trimmed = { ...state };
+  for (const key of oversized)
+    delete trimmed[key];
+  return { ...viewState, state: trimmed };
+}
 var LeafSync = class {
   constructor(plugin, store) {
     this.plugin = plugin;
     this.store = store;
     this.reconcileRunning = false;
-    this.reconcileQueued = false;
+    this.reconcileQueuedMode = null;
+    this.lastViewStateSync = 0;
     /** Groups currently mid-open (see openGroup) -- reconcile skips syncing
      * their tab list until opening finishes, to avoid treating "not created
      * yet" the same as "closed". */
     this.openingGroups = /* @__PURE__ */ new Set();
+    /**
+     * Set for the duration of one reconcile pass so each leaf's view state is
+     * read exactly once per pass instead of once per caller.
+     *
+     * `leaf.getViewState()` is not a cheap accessor -- it calls straight
+     * through to the view's own `getState()`, and a view is free to do real
+     * work there (Terminus serializes its entire scrollback buffer). A pass
+     * asked for the same leaf's state two or three times over: once building
+     * its identity, again to sync it, again when adding it to a group. On a
+     * workspace with a couple of live terminals that was several full
+     * serializations every three seconds, on the main thread, which is the
+     * same thread xterm.js needs in order to accept a keystroke.
+     *
+     * Pass-scoped rather than long-lived: view state genuinely does change
+     * between passes, so caching it across them would make the plugin act on
+     * stale data. A WeakMap so a leaf closed mid-pass isn't held alive.
+     */
+    this.viewStateCache = null;
   }
   get app() {
     return this.plugin.app;
@@ -521,7 +597,7 @@ var LeafSync = class {
    */
   getTabIdentity(leaf) {
     var _a, _b;
-    const viewState = leaf.getViewState();
+    const viewState = this.readViewState(leaf);
     const rawFile = (_a = viewState.state) == null ? void 0 : _a.file;
     const path = typeof rawFile === "string" && this.app.vault.getAbstractFileByPath(rawFile) instanceof import_obsidian.TFile ? rawFile : void 0;
     if (path)
@@ -537,10 +613,21 @@ var LeafSync = class {
     const key = this.getTabIdentity(leaf).key;
     return this.store.items.find((i) => i.type === "tab" && i.tabKey === key);
   }
+  readViewState(leaf) {
+    const cache = this.viewStateCache;
+    if (!cache)
+      return leaf.getViewState();
+    const cached = cache.get(leaf);
+    if (cached)
+      return cached;
+    const fresh = leaf.getViewState();
+    cache.set(leaf, fresh);
+    return fresh;
+  }
   start() {
     this.workspace.onLayoutReady(() => void this.reconcile());
     this.plugin.registerEvent(this.workspace.on("layout-change", () => void this.reconcile()));
-    this.plugin.registerInterval(window.setInterval(() => void this.reconcile(), 3e3));
+    this.plugin.registerInterval(window.setInterval(() => void this.reconcile("poll"), 3e3));
     this.plugin.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         if (file instanceof import_obsidian.TFile)
@@ -558,19 +645,22 @@ var LeafSync = class {
    * a call that arrives while one is already running just requests exactly
    * one more full pass after the current one finishes.
    */
-  async reconcile() {
+  async reconcile(mode = "full") {
     if (this.reconcileRunning) {
-      this.reconcileQueued = true;
+      this.reconcileQueuedMode = this.reconcileQueuedMode === "full" || mode === "full" ? "full" : "poll";
       return;
     }
     this.reconcileRunning = true;
     try {
-      await this.doReconcile();
+      this.viewStateCache = /* @__PURE__ */ new WeakMap();
+      await this.store.batch(() => this.doReconcile(mode));
     } finally {
+      this.viewStateCache = null;
       this.reconcileRunning = false;
-      if (this.reconcileQueued) {
-        this.reconcileQueued = false;
-        void this.reconcile();
+      const queued = this.reconcileQueuedMode;
+      if (queued) {
+        this.reconcileQueuedMode = null;
+        void this.reconcile(queued);
       }
     }
   }
@@ -591,7 +681,7 @@ var LeafSync = class {
    * pass. This includes any leaf at all (a terminal, an embedded browser
    * tab, a canvas, any other plugin's view) -- not just notes.
    */
-  async doReconcile() {
+  async doReconcile(mode) {
     var _a, _b;
     const openLeafIds = /* @__PURE__ */ new Set();
     const keyToLeaf = /* @__PURE__ */ new Map();
@@ -618,13 +708,17 @@ var LeafSync = class {
       if (item.type === "tab" && item.tabKey)
         tabByKey.set(item.tabKey, item);
     }
+    const syncState = mode === "full" || Date.now() - this.lastViewStateSync >= VIEW_STATE_POLL_INTERVAL_MS;
+    if (syncState)
+      this.lastViewStateSync = Date.now();
     for (const entries of containerLeaves.values()) {
       for (const { leaf, identity } of entries) {
         const tab = tabByKey.get(identity.key);
         if (!tab)
           continue;
         await this.store.syncTitle(tab.id, identity.title);
-        await this.store.syncViewState(tab.id, leaf.getViewState());
+        if (syncState)
+          await this.store.syncViewState(tab.id, trimViewState(this.readViewState(leaf)));
       }
     }
     for (const node of this.store.items) {
@@ -721,7 +815,7 @@ var LeafSync = class {
         continue;
       await this.store.addTab(groupId, key, entry.identity.title, {
         filePath: entry.identity.path,
-        viewState: entry.leaf.getViewState()
+        viewState: trimViewState(this.readViewState(entry.leaf))
       });
     }
   }

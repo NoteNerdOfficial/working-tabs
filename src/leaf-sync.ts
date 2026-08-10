@@ -27,6 +27,54 @@ function isBlankTab(tab: SpaceNode): boolean {
 	return !type || type === 'empty';
 }
 
+/** How much of a captured `viewState` is worth persisting, per string value.
+ * Anything bigger is a payload some view is carrying around, not the identity
+ * of a tab we need in order to reopen it -- Terminus, for instance, returns up
+ * to 1000 lines of serialized terminal scrollback under `state.scrollback`,
+ * which can run to hundreds of KB of escape-code-dense text. Persisting that
+ * put a live terminal's whole transcript into this plugin's data.json, made
+ * every unrelated store write re-serialize it, and -- because a running
+ * terminal's scrollback changes on practically every keystroke -- guaranteed
+ * that syncViewState's "has anything changed?" check never once matched, so
+ * every reconcile pass wrote the file and re-rendered the sidebar. 8 KB is
+ * comfortably above any real identity field (paths, URLs, view modes) and
+ * far below any such payload. */
+const MAX_VIEW_STATE_VALUE_CHARS = 8 * 1024;
+
+/** How long a poll-driven pass will go without refreshing stored view state.
+ * layout-change passes always refresh it, so this only governs the changes no
+ * workspace event announces -- chiefly a web viewer tab navigating to a new
+ * URL. Half a minute keeps that near-current while keeping the 3s title poll
+ * (see start()) off the expensive path. */
+const VIEW_STATE_POLL_INTERVAL_MS = 30_000;
+
+/**
+ * 'full' passes refresh everything, including each tab's stored view state.
+ * 'poll' passes come from the plain interval timer, whose only job is noticing
+ * renames no workspace event fires for, and so skip that refresh unless it has
+ * been long enough (see VIEW_STATE_POLL_INTERVAL_MS).
+ */
+type SyncMode = 'full' | 'poll';
+
+/** Strips oversized string values out of a captured view state so only its
+ * identity-sized parts get persisted -- e.g. a Terminus tab keeps its `cwd`
+ * (which is what makes reopening it land in the right directory) and drops its
+ * `scrollback`. Returns the original object untouched when nothing is
+ * oversized, which is the case for every ordinary note/canvas/web tab, so the
+ * common path allocates nothing. */
+function trimViewState(viewState: ViewState): ViewState {
+	const state = viewState.state;
+	if (!state || typeof state !== 'object') return viewState;
+	let oversized: string[] | null = null;
+	for (const [key, value] of Object.entries(state)) {
+		if (typeof value === 'string' && value.length > MAX_VIEW_STATE_VALUE_CHARS) (oversized ??= []).push(key);
+	}
+	if (!oversized) return viewState;
+	const trimmed = { ...state };
+	for (const key of oversized) delete trimmed[key];
+	return { ...viewState, state: trimmed };
+}
+
 interface TabIdentity {
 	/** Matching key used for reconcile's dedup/diff logic -- equals `path` when
 	 * there is one (restart-stable), otherwise a session-scoped fallback. */
@@ -71,7 +119,7 @@ export class LeafSync {
 	 * key too, which would otherwise get misread as a real path.
 	 */
 	private getTabIdentity(leaf: WorkspaceLeaf): TabIdentity {
-		const viewState = leaf.getViewState();
+		const viewState = this.readViewState(leaf);
 		const rawFile = viewState.state?.file;
 		const path =
 			typeof rawFile === 'string' && this.app.vault.getAbstractFileByPath(rawFile) instanceof TFile
@@ -97,11 +145,41 @@ export class LeafSync {
 	}
 
 	private reconcileRunning = false;
-	private reconcileQueued = false;
+	private reconcileQueuedMode: SyncMode | null = null;
+	private lastViewStateSync = 0;
 	/** Groups currently mid-open (see openGroup) -- reconcile skips syncing
 	 * their tab list until opening finishes, to avoid treating "not created
 	 * yet" the same as "closed". */
 	private openingGroups = new Set<string>();
+
+	/**
+	 * Set for the duration of one reconcile pass so each leaf's view state is
+	 * read exactly once per pass instead of once per caller.
+	 *
+	 * `leaf.getViewState()` is not a cheap accessor -- it calls straight
+	 * through to the view's own `getState()`, and a view is free to do real
+	 * work there (Terminus serializes its entire scrollback buffer). A pass
+	 * asked for the same leaf's state two or three times over: once building
+	 * its identity, again to sync it, again when adding it to a group. On a
+	 * workspace with a couple of live terminals that was several full
+	 * serializations every three seconds, on the main thread, which is the
+	 * same thread xterm.js needs in order to accept a keystroke.
+	 *
+	 * Pass-scoped rather than long-lived: view state genuinely does change
+	 * between passes, so caching it across them would make the plugin act on
+	 * stale data. A WeakMap so a leaf closed mid-pass isn't held alive.
+	 */
+	private viewStateCache: WeakMap<WorkspaceLeaf, ViewState> | null = null;
+
+	private readViewState(leaf: WorkspaceLeaf): ViewState {
+		const cache = this.viewStateCache;
+		if (!cache) return leaf.getViewState();
+		const cached = cache.get(leaf);
+		if (cached) return cached;
+		const fresh = leaf.getViewState();
+		cache.set(leaf, fresh);
+		return fresh;
+	}
 
 	start(): void {
 		this.workspace.onLayoutReady(() => void this.reconcile());
@@ -113,7 +191,10 @@ export class LeafSync {
 		// layout-change never sees it. A slow periodic fallback is the only way
 		// to notice; syncTitle() already no-ops when nothing's actually changed,
 		// so this costs nothing on the (typical) tick where titles are unchanged.
-		this.plugin.registerInterval(window.setInterval(() => void this.reconcile(), 3000));
+		// Runs in 'poll' mode: titles are all it exists to catch, and the view
+		// state refresh a full pass also does is far too expensive to run on a
+		// timer against views that do real work in getState().
+		this.plugin.registerInterval(window.setInterval(() => void this.reconcile('poll'), 3000));
 
 		// A file rename is a vault event, not a workspace layout-change --
 		// without this, a renamed file's tab looks "closed" (old path no
@@ -136,19 +217,27 @@ export class LeafSync {
 	 * a call that arrives while one is already running just requests exactly
 	 * one more full pass after the current one finishes.
 	 */
-	private async reconcile(): Promise<void> {
+	private async reconcile(mode: SyncMode = 'full'): Promise<void> {
 		if (this.reconcileRunning) {
-			this.reconcileQueued = true;
+			// Never let a cheap poll downgrade a queued full pass -- a real
+			// layout change still has to be reconciled in full once the current
+			// pass finishes, whatever else arrived in the meantime.
+			this.reconcileQueuedMode = this.reconcileQueuedMode === 'full' || mode === 'full' ? 'full' : 'poll';
 			return;
 		}
 		this.reconcileRunning = true;
 		try {
-			await this.doReconcile();
+			// One disk write and one sidebar re-render for the whole pass,
+			// rather than one of each per tab touched (see store.batch).
+			this.viewStateCache = new WeakMap();
+			await this.store.batch(() => this.doReconcile(mode));
 		} finally {
+			this.viewStateCache = null;
 			this.reconcileRunning = false;
-			if (this.reconcileQueued) {
-				this.reconcileQueued = false;
-				void this.reconcile();
+			const queued = this.reconcileQueuedMode;
+			if (queued) {
+				this.reconcileQueuedMode = null;
+				void this.reconcile(queued);
 			}
 		}
 	}
@@ -170,7 +259,7 @@ export class LeafSync {
 	 * pass. This includes any leaf at all (a terminal, an embedded browser
 	 * tab, a canvas, any other plugin's view) -- not just notes.
 	 */
-	private async doReconcile(): Promise<void> {
+	private async doReconcile(mode: SyncMode): Promise<void> {
 		const openLeafIds = new Set<string>();
 		const keyToLeaf = new Map<string, WorkspaceLeaf>();
 		const containerLeaves = new Map<object, { leaf: WorkspaceLeaf; identity: TabIdentity }[]>();
@@ -204,12 +293,17 @@ export class LeafSync {
 		for (const item of this.store.items) {
 			if (item.type === 'tab' && item.tabKey) tabByKey.set(item.tabKey, item);
 		}
+		// View state is the expensive half of this loop (see readViewState) and
+		// the half nothing urgent depends on, so the 3s title poll only pays
+		// for it occasionally; a real layout change always does.
+		const syncState = mode === 'full' || Date.now() - this.lastViewStateSync >= VIEW_STATE_POLL_INTERVAL_MS;
+		if (syncState) this.lastViewStateSync = Date.now();
 		for (const entries of containerLeaves.values()) {
 			for (const { leaf, identity } of entries) {
 				const tab = tabByKey.get(identity.key);
 				if (!tab) continue;
 				await this.store.syncTitle(tab.id, identity.title);
-				await this.store.syncViewState(tab.id, leaf.getViewState());
+				if (syncState) await this.store.syncViewState(tab.id, trimViewState(this.readViewState(leaf)));
 			}
 		}
 
@@ -351,7 +445,7 @@ export class LeafSync {
 			if (existingKeys.has(key)) continue;
 			await this.store.addTab(groupId, key, entry.identity.title, {
 				filePath: entry.identity.path,
-				viewState: entry.leaf.getViewState(),
+				viewState: trimViewState(this.readViewState(entry.leaf)),
 			});
 		}
 	}

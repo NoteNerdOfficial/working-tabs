@@ -131,7 +131,44 @@ export class TabSpacesStore {
 		this.notify();
 	}
 
+	/**
+	 * Collapses every mutation made inside `fn` into a single disk write and a
+	 * single change notification.
+	 *
+	 * Each mutator below ends in `save(); notify()`, which is right for a lone
+	 * user action but pathological for a reconcile pass: that walks every open
+	 * tab and can call syncTitle/syncViewState/setOrder on each, so an N-tab
+	 * workspace paid N full `saveData()` serializations of the entire store
+	 * plus N full sidebar re-renders -- all synchronous, all on the same main
+	 * thread that xterm.js needs to accept keystrokes and paint. Batching turns
+	 * that back into one of each.
+	 *
+	 * Re-entrant (depth-counted) because reconcile's helpers call each other,
+	 * and flushed in a `finally` so a throw mid-pass still persists whatever
+	 * already changed rather than silently dropping it.
+	 */
+	async batch<T>(fn: () => Promise<T>): Promise<T> {
+		this.batchDepth++;
+		try {
+			return await fn();
+		} finally {
+			this.batchDepth--;
+			if (this.batchDepth === 0 && this.batchPending) {
+				this.batchPending = false;
+				await this.plugin.saveData(this.data);
+				this.notify();
+			}
+		}
+	}
+
+	private batchDepth = 0;
+	private batchPending = false;
+
 	async save(): Promise<void> {
+		if (this.batchDepth > 0) {
+			this.batchPending = true;
+			return;
+		}
 		await this.plugin.saveData(this.data);
 	}
 
@@ -143,6 +180,10 @@ export class TabSpacesStore {
 	}
 
 	private notify(): void {
+		if (this.batchDepth > 0) {
+			this.batchPending = true;
+			return;
+		}
 		for (const listener of this.listeners) listener();
 	}
 
