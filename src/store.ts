@@ -4,6 +4,9 @@ import {
 	type TabSpacesData,
 	type TabSpacesSettings,
 	type OpenBehavior,
+	type ColorSlot,
+	type ColorChoice,
+	COLOR_SLOTS,
 	DEFAULT_DATA,
 	DEFAULT_SETTINGS,
 	COMPLETED_PARENT_ID,
@@ -37,6 +40,95 @@ export class TabSpacesStore {
 		for (const item of this.data.items) {
 			if (item.parentId === LEGACY_UNSORTED_PARENT_ID) item.parentId = null;
 		}
+		// Colour coding arrived after these groups/sections were created, so
+		// backfill the slot they'd have been handed at creation -- otherwise
+		// existing users would see an uncoloured sidebar until they made
+		// something new, which reads as the feature being broken.
+		for (const item of this.data.items) {
+			if ((item.type === 'group' || item.type === 'section') && !item.autoColor) {
+				item.autoColor = this.pickAutoColor();
+			}
+		}
+	}
+
+	/**
+	 * Hands out the least-used slot, so a handful of groups and sections come
+	 * out visibly different instead of the rotation doubling back early.
+	 *
+	 * Groups and sections share one rotation rather than counting separately:
+	 * a section's stripe and a root-level group's stripe show up side by side
+	 * in the same workspace, so letting each type restart the rotation would
+	 * reliably hand the first section the same colour as the first group --
+	 * exactly the collision the feature exists to prevent.
+	 *
+	 * Counts `autoColor` only: an explicit user choice shouldn't push the
+	 * automatic rotation around.
+	 */
+	private pickAutoColor(): ColorSlot {
+		const used = new Map<ColorSlot, number>(COLOR_SLOTS.map((slot) => [slot, 0]));
+		for (const node of this.data.items) {
+			if (!node.autoColor) continue;
+			used.set(node.autoColor, (used.get(node.autoColor) ?? 0) + 1);
+		}
+		let best: ColorSlot = COLOR_SLOTS[0];
+		for (const slot of COLOR_SLOTS) {
+			if ((used.get(slot) ?? 0) < (used.get(best) ?? 0)) best = slot;
+		}
+		return best;
+	}
+
+	/**
+	 * The colour a group/section actually displays, resolved in this order:
+	 * the node's own explicit pick, then whatever its section resolves to
+	 * (recursively, so a section nested in a section still follows), then its
+	 * own auto-assigned slot.
+	 *
+	 * Inheritance living here -- rather than being copied onto each group when
+	 * it's filed -- is what makes drag-into-a-section adopt the section colour
+	 * with no move-time bookkeeping at all, and drag-back-out restore the
+	 * group's own. Nothing has to notice the move; the answer is just derived
+	 * fresh each time it's asked for.
+	 */
+	effectiveColor(node: SpaceNode): ColorSlot | undefined {
+		// The single choke point every stripe and swatch already runs through,
+		// which is what lets the master switch be one line instead of a
+		// suppression rule duplicated across the sidebar and the workspace.
+		if (!this.data.settings.colorCoding) return undefined;
+		if (node.type !== 'group' && node.type !== 'section') return undefined;
+		if (node.color) return node.color === 'none' ? undefined : node.color;
+		const parent = node.parentId ? this.find(node.parentId) : undefined;
+		// A section set to 'none' hands back undefined here, so its groups go
+		// uncoloured with it -- no separate rule needed for the section case.
+		if (parent?.type === 'section') return this.effectiveColor(parent);
+		return node.autoColor;
+	}
+
+	/** `color: undefined` is "Automatic" -- back to inheriting from the section
+	 * (or to this node's own auto-assigned slot when it isn't in one).
+	 * `'none'` is the explicit opt-out, which inheritance can't override. */
+	async setColor(id: string, color: ColorChoice | undefined): Promise<void> {
+		const node = this.find(id);
+		if (!node || (node.type !== 'group' && node.type !== 'section')) return;
+		node.color = color;
+		await this.save();
+		this.notify();
+	}
+
+	/** Drops every explicit colour inside a section, so groups that had been
+	 * individually recoloured fall back to following the section again. The
+	 * "make this whole section one colour" escape hatch, kept as its own
+	 * deliberate action rather than a side effect of setting the section's
+	 * colour -- which would silently discard per-group choices. */
+	async clearChildColors(sectionId: string): Promise<void> {
+		let changed = false;
+		for (const child of this.children(sectionId)) {
+			if (child.color === undefined) continue;
+			child.color = undefined;
+			changed = true;
+		}
+		if (!changed) return;
+		await this.save();
+		this.notify();
 	}
 
 	async save(): Promise<void> {
@@ -101,6 +193,7 @@ export class TabSpacesStore {
 			parentId,
 			order: this.nextOrder(parentId),
 			collapsed: false,
+			autoColor: this.pickAutoColor(),
 		};
 		this.data.items.push(node);
 		await this.save();
@@ -121,6 +214,7 @@ export class TabSpacesStore {
 			order: this.nextOrder(parentId),
 			collapsed: false,
 			openBehavior: { ...openBehavior },
+			autoColor: this.pickAutoColor(),
 		};
 		this.data.items.push(node);
 		await this.save();
@@ -314,13 +408,43 @@ export class TabSpacesStore {
 	 * different group, and moving a group into/out of a section are all just
 	 * this one operation -- no special-casing needed.
 	 */
-	async moveInto(id: string, newParentId: string | null, index: number): Promise<void> {
+	async moveInto(
+		id: string,
+		newParentId: string | null,
+		index: number,
+		options: { adoptSectionColor?: boolean } = {}
+	): Promise<void> {
 		const node = this.find(id);
 		if (!node) return;
 		// A group/section can't be dropped into itself or one of its own descendants.
 		if (newParentId && (newParentId === id || this.isDescendantOf(newParentId, id))) return;
 
+		const previousParentId = node.parentId;
+		const newParent = newParentId ? this.find(newParentId) : undefined;
 		node.parentId = newParentId;
+
+		// Filing a group into a section adopts that section's colour, even if
+		// the group had one of its own: dropping something into a colour-coded
+		// section is a statement about where it now belongs, and a group that
+		// kept its old colour would sit in the section looking like it wasn't
+		// really part of it. Clearing the override (rather than overwriting it
+		// with the section's slot) is what keeps the group tracking the section
+		// afterwards, including if the section is later recoloured.
+		//
+		// Guarded on the parent actually changing, so reordering a group *within*
+		// a section doesn't wipe a colour deliberately set while it lived there.
+		// Restore opts out entirely -- putting a completed group back where it
+		// came from should return it as it was, not repaint it.
+		if (
+			(options.adoptSectionColor ?? true) &&
+			node.type === 'group' &&
+			node.color !== undefined &&
+			newParentId !== previousParentId &&
+			newParent?.type === 'section'
+		) {
+			node.color = undefined;
+		}
+
 		const siblings = this.children(newParentId).filter((s) => s.id !== id);
 		siblings.splice(Math.max(0, Math.min(index, siblings.length)), 0, node);
 		siblings.forEach((s, i) => {
@@ -354,6 +478,8 @@ export class TabSpacesStore {
 		if (!node || node.type !== 'group') return;
 		const target = node.lastParentId && this.find(node.lastParentId) ? node.lastParentId : null;
 		node.completedAt = undefined;
-		await this.moveInto(id, target, this.children(target).length);
+		// Restoring is "put it back how it was", so it's the one move that
+		// doesn't repaint the group to match the section it lands in.
+		await this.moveInto(id, target, this.children(target).length, { adoptSectionColor: false });
 	}
 }

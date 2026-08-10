@@ -18,6 +18,15 @@ function titleFromPath(path: string): string {
 	return base.replace(/\.[^./]+$/, '') || base;
 }
 
+/** A tab with nothing to restore -- a blank "New tab" pane. Reopening one
+ * would just produce another empty tab, so it isn't worth keeping a record of
+ * once its pane is gone. */
+function isBlankTab(tab: SpaceNode): boolean {
+	if (tab.filePath) return false;
+	const type = (tab.viewState as ViewState | undefined)?.type;
+	return !type || type === 'empty';
+}
+
 interface TabIdentity {
 	/** Matching key used for reconcile's dedup/diff logic -- equals `path` when
 	 * there is one (restart-stable), otherwise a session-scoped fallback. */
@@ -243,24 +252,45 @@ export class LeafSync {
 				await this.store.setHomeLeaf(node.id, getLeafId(replacement));
 				continue;
 			}
-			// Truly nothing from this group is open anywhere anymore -- prune
-			// whatever wasn't deliberately kept via the "done" checkbox
-			// (otherwise its stale record would just sit there forever,
-			// looking like a still-open tab that never closes), and if that
-			// leaves the group with nothing at all, the group itself has no
-			// reason to keep occupying the sidebar as an empty husk.
+			// Truly nothing from this group is open anywhere anymore, so its
+			// whole pane is gone -- closed natively through the tab strip's
+			// menu ("Close all"), by closing its last remaining tab, or by
+			// closing the split. That's the same event as the sidebar's own
+			// "Close group", and gets the same treatment: the group goes
+			// dormant, keeping every tab record so it can be reopened later.
+			// Closing a pane isn't a request to throw the group away --
+			// completing or deleting it are the deliberate ways to do that.
 			await this.store.setHomeLeaf(node.id, undefined);
+
+			// Blank tabs are the one thing not worth remembering: an "empty"
+			// leaf has nothing to reopen, so keeping it would leave a husk
+			// group behind for every scratch pane that ever existed.
 			for (const tab of this.store.children(node.id)) {
-				if (!tab.done) await this.store.remove(tab.id);
+				if (!tab.done && isBlankTab(tab)) await this.store.remove(tab.id);
 			}
 			if (this.store.children(node.id).length === 0) await this.store.remove(node.id);
 		}
 
-		// 2. Claim: a not-yet-live group whose every tab is open (regardless of
-		// which pane) reattaches to that pane -- the native-session-restore
-		// case. Only meaningful for tabs with a restart-stable key (real
-		// files); non-file tabs just won't match here.
+		// 2. Claim. Groups already live from an earlier pass go first, so that
+		// the reattach pass below can tell an unowned pane from one that's
+		// already somebody's -- a dormant group's tabs merely happening to be
+		// open again (in a pane another group already occupies) must not have
+		// it latch onto that pane, or two groups would then both claim the
+		// same container and fight over its tab list pass after pass.
 		const claimedContainers = new Map<object, string>();
+		for (const node of this.store.items) {
+			if (node.type !== 'group' || !node.homeLeafId) continue;
+			const leaf = this.workspace.getLeafById(node.homeLeafId);
+			if (!leaf) continue;
+			claimedContainers.set(leaf.parent, node.id);
+			// Re-asserted per pass rather than only on claim: Obsidian rebuilds
+			// pane DOM on splits and drags, which drops the inline property.
+			this.applyAccent(node);
+		}
+		// A not-yet-live group whose every tab is open in a pane no other group
+		// owns reattaches to that pane -- the native-session-restore case. Only
+		// meaningful for tabs with a restart-stable key (real files); non-file
+		// tabs just won't match here.
 		for (const node of this.store.items) {
 			if (node.type !== 'group' || node.homeLeafId) continue;
 			const tabs = this.store.children(node.id);
@@ -269,16 +299,11 @@ export class LeafSync {
 			if (leaves.some((l) => !l)) continue;
 			const first = leaves[0] as WorkspaceLeaf;
 			const firstId = getLeafId(first);
-			if (!firstId) continue;
+			if (!firstId || claimedContainers.has(first.parent)) continue;
 			await this.store.setHomeLeaf(node.id, firstId);
 			this.applyHiddenClass(node);
+			this.applyAccent(node);
 			claimedContainers.set(first.parent, node.id);
-		}
-		// Any group already live from an earlier pass.
-		for (const node of this.store.items) {
-			if (node.type !== 'group' || !node.homeLeafId) continue;
-			const leaf = this.workspace.getLeafById(node.homeLeafId);
-			if (leaf) claimedContainers.set(leaf.parent, node.id);
 		}
 
 		// 3. Every live group's tab list mirrors its pane's actual contents --
@@ -357,6 +382,53 @@ export class LeafSync {
 		const leaf = this.workspace.getLeafById(group.homeLeafId);
 		const tabsEl = leaf?.view.containerEl.closest('.workspace-tabs') as HTMLElement | null;
 		tabsEl?.toggleClass('working-tabs-hidden-pane', this.isEffectivelyHidden(group));
+	}
+
+	/**
+	 * Colour coding's half of the same mechanism: reaches the group's pane the
+	 * exact same way applyHiddenClass does, and sets a custom property that
+	 * styles.css turns into a stripe down the pane's leading edge. Nothing but
+	 * a property write from here -- the stripe itself is declarative, so it
+	 * can't drift out of sync with the DOM.
+	 *
+	 * The edge is deliberately not the tab-header row: the "Hide tab bar"
+	 * setting deletes that row outright (see styles.css), and an accent that
+	 * vanishes for the people leaning hardest on this sidebar would be the
+	 * wrong half of the feature to lose.
+	 *
+	 * Always set *or* clear, never set-only: panes get recycled between groups
+	 * as they open and close, and a stripe left behind would claim a pane still
+	 * belongs to a group that has since moved out of it.
+	 */
+	private applyAccent(group: SpaceNode): void {
+		if (!group.homeLeafId) return;
+		const leaf = this.workspace.getLeafById(group.homeLeafId);
+		const tabsEl = leaf?.view.containerEl.closest('.workspace-tabs') as HTMLElement | null;
+		if (!tabsEl) return;
+		const slot = this.store.effectiveColor(group);
+		const next = slot ? `var(--working-tabs-color-${slot})` : '';
+		// Compared before writing because refreshAccents runs on every store
+		// change (which includes each reconcile tick), and the overwhelmingly
+		// common case is that nothing about the colour has moved.
+		if (tabsEl.style.getPropertyValue('--working-tabs-accent') === next) return;
+		if (slot) {
+			tabsEl.style.setProperty('--working-tabs-accent', next);
+			tabsEl.addClass('working-tabs-accented');
+		} else {
+			tabsEl.style.removeProperty('--working-tabs-accent');
+			tabsEl.removeClass('working-tabs-accented');
+		}
+	}
+
+	/** Re-asserts every live group's stripe. Driven off the store's change
+	 * event (see main.ts) because so many different edits change what a pane
+	 * should be showing -- picking a colour, dragging a group into or out of a
+	 * section, recolouring the section itself, completing a group -- and every
+	 * one of them already goes through the store. */
+	refreshAccents(): void {
+		for (const node of this.store.items) {
+			if (node.type === 'group' && node.homeLeafId) this.applyAccent(node);
+		}
 	}
 
 	async toggleGroupHidden(id: string): Promise<void> {

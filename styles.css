@@ -1,3 +1,21 @@
+/* Colour-coding palette. Declared on `body` (not :root) because that's where
+   Obsidian declares the --color-* variables these defer to -- a var() reference
+   only resolves against the element the property is declared on, so hoisting
+   these to :root would silently leave every one of them invalid. Deferring to
+   Obsidian's own colours rather than fixed hexes is what makes a group keep
+   looking right across a theme switch; the fallbacks only come into play if a
+   theme drops one. See COLOR_SLOTS in types.ts -- the two lists must match. */
+body {
+	--working-tabs-color-blue: var(--color-blue, #4a7fe0);
+	--working-tabs-color-purple: var(--color-purple, #8b6fd6);
+	--working-tabs-color-green: var(--color-green, #43a047);
+	--working-tabs-color-orange: var(--color-orange, #e08b3c);
+	--working-tabs-color-cyan: var(--color-cyan, #2fa3a3);
+	--working-tabs-color-pink: var(--color-pink, #d45d97);
+	--working-tabs-color-yellow: var(--color-yellow, #d0a215);
+	--working-tabs-color-red: var(--color-red, #d1453b);
+}
+
 .working-tabs-view {
 	display: flex;
 	flex-direction: column;
@@ -67,6 +85,21 @@
 	border-radius: 7px;
 	cursor: pointer;
 	position: relative;
+}
+
+/* The sidebar half of the colour coding: a bar down the row's leading edge,
+   matching the stripe on the pane it stands for (see .working-tabs-accented).
+   Absolutely positioned rather than a border so it doesn't fight the inline
+   padding-left that carries each row's indent depth. */
+.working-tabs-row.working-tabs-colored::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 4px;
+	bottom: 4px;
+	width: 3px;
+	border-radius: 3px;
+	background-color: var(--working-tabs-accent);
 }
 
 /* The whole row is the drag handle -- no separate grip affordance. */
@@ -326,6 +359,50 @@
  * JS state (snapshotted flex values, etc.) that can drift out of sync with
  * reality -- the failure mode that caused that corruption.
  */
+/* Colour coding, workspace side: a stripe down the pane's leading edge, set by
+   LeafSync.applyAccent. Deliberately not on the tab-header row -- the "Hide tab
+   bar" setting below removes that element entirely, so an accent living there
+   would disappear for exactly the people relying on the sidebar most.
+
+   An overlay rather than a border (which would shift the pane's layout) or an
+   inset box-shadow (which the pane's own children paint straight over, since
+   .view-content carries an opaque --background-primary across the full width).
+   `position: relative` is asserted here rather than assumed: it costs nothing
+   if Obsidian already sets it, and the stripe silently escapes to some ancestor
+   if it doesn't. pointer-events: none keeps it clear of the pane drop zones,
+   which are live along exactly this edge (see registerWorkspaceDropZones). */
+.workspace-tabs.working-tabs-accented {
+	position: relative;
+}
+
+.workspace-tabs.working-tabs-accented::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 3px;
+	z-index: 1;
+	pointer-events: none;
+	border-radius: 3px 0 0 3px;
+	background-color: var(--working-tabs-accent);
+}
+
+/* The colour circle beside each name in the colour menu -- see colorMenuTitle
+   in TabSpacesView. Centred rather than sat on the baseline (a circle has no
+   descender to line up), and ringed so the pale end of the palette -- yellow
+   especially -- still reads against a light theme's menu background. */
+.working-tabs-swatch {
+	display: inline-block;
+	width: 11px;
+	height: 11px;
+	margin-right: 9px;
+	border-radius: 50%;
+	vertical-align: middle;
+	background-color: var(--working-tabs-accent);
+	box-shadow: 0 0 0 1px var(--background-modifier-border);
+}
+
 body:not(.is-phone) .workspace-split.mod-root .workspace-tabs.working-tabs-hidden-pane {
 	display: none;
 }

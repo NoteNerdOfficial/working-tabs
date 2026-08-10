@@ -1,10 +1,21 @@
 import { ItemView, Menu, Notice, WorkspaceLeaf, setIcon, setTooltip } from 'obsidian';
 import type TabSpacesPlugin from '../main';
 import type { TabSpacesStore } from '../store';
-import type { SpaceNode, OpenBehavior } from '../types';
-import { VIEW_TYPE_WORKING_TABS, COMPLETED_PARENT_ID } from '../types';
+import type { SpaceNode, OpenBehavior, ColorSlot } from '../types';
+import { VIEW_TYPE_WORKING_TABS, COMPLETED_PARENT_ID, COLOR_SLOTS, COLOR_LABELS } from '../types';
 import { ConfirmCompleteModal } from '../modals/ConfirmCompleteModal';
 import { GroupDescriptionModal } from '../modals/GroupDescriptionModal';
+
+/** A real swatch beside each colour name in the menu -- Obsidian's MenuItem
+ * takes a DocumentFragment for its title, which is the only way to get colour
+ * into a menu without an icon font full of pre-tinted dots. */
+function colorMenuTitle(slot: ColorSlot): DocumentFragment {
+	const frag = createFragment();
+	const swatch = frag.createSpan({ cls: 'working-tabs-swatch' });
+	swatch.style.setProperty('--working-tabs-accent', `var(--working-tabs-color-${slot})`);
+	frag.createSpan({ text: COLOR_LABELS[slot] });
+	return frag;
+}
 
 type DropPosition = 'before' | 'after' | 'into';
 type PaneDropZone = 'top' | 'bottom' | 'left' | 'right' | 'center';
@@ -194,6 +205,16 @@ export class TabSpacesView extends ItemView {
 			attr: { 'data-node-id': node.id, style: `padding-left: ${8 + depth * 16}px`, draggable: 'true' },
 		});
 		this.wireDrag(row, node);
+
+		// Same custom property the pane's stripe uses, so a row and the pane it
+		// stands for are literally reading the same colour -- that's the whole
+		// point of the coding, and it stops the two drifting apart. Tabs
+		// resolve to nothing and stay unstyled.
+		const slot = this.store.effectiveColor(node);
+		if (slot) {
+			row.addClass('working-tabs-colored');
+			row.style.setProperty('--working-tabs-accent', `var(--working-tabs-color-${slot})`);
+		}
 
 		this.visibleOrder.push(node.id);
 		if (node.id === this.focusedId) row.addClass('is-focused');
@@ -667,6 +688,66 @@ export class TabSpacesView extends ItemView {
 
 	// ── Context menus ────────────────────────────────────────
 
+	/**
+	 * Opened from the "Colour" item on a group or section menu. A second Menu
+	 * rather than a submenu: `MenuItem.setSubmenu` isn't in the public API for
+	 * the versions this plugin supports, and reaching past the typings for a
+	 * nested menu isn't worth it when reopening at the same point costs one
+	 * click and can't break.
+	 */
+	private showColorMenu(node: SpaceNode, evt: MouseEvent): void {
+		const menu = new Menu();
+		// Forced onto Obsidian's own DOM menu. Desktop defaults to letting the
+		// OS draw menus, and a native menu item can only carry plain text -- the
+		// swatch element in each title is silently dropped, leaving a list of
+		// colour names with no colour in it. This is the one menu in the plugin
+		// whose whole point is the rendering, so it opts out; every other menu
+		// is left native and matches the rest of the app. No-op on mobile, where
+		// menus are always DOM anyway.
+		menu.setUseNativeMenu(false);
+		const parent = node.parentId ? this.store.find(node.parentId) : undefined;
+		const inSection = node.type === 'group' && parent?.type === 'section';
+
+		for (const slot of COLOR_SLOTS) {
+			menu.addItem((item) =>
+				item
+					.setTitle(colorMenuTitle(slot))
+					.setChecked(node.color === slot)
+					.onClick(() => void this.store.setColor(node.id, slot))
+			);
+		}
+
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				// Wording follows what clearing actually falls back to, since
+				// "Automatic" would be a lie for a group that's about to start
+				// tracking its section instead.
+				.setTitle(inSection ? 'Use section colour' : 'Automatic')
+				.setIcon('rotate-ccw')
+				.setChecked(!node.color)
+				.onClick(() => void this.store.setColor(node.id, undefined))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('No colour')
+				.setIcon('ban')
+				.setChecked(node.color === 'none')
+				.onClick(() => void this.store.setColor(node.id, 'none'))
+		);
+
+		if (node.type === 'section' && this.store.children(node.id).some((child) => child.color)) {
+			menu.addItem((item) =>
+				item
+					.setTitle('Reset group colours')
+					.setIcon('paintbrush')
+					.onClick(() => void this.store.clearChildColors(node.id))
+			);
+		}
+
+		menu.showAtMouseEvent(evt);
+	}
+
 	private showSectionMenu(node: SpaceNode, evt: MouseEvent): void {
 		const menu = new Menu();
 		menu.addItem((item) =>
@@ -688,6 +769,13 @@ export class TabSpacesView extends ItemView {
 				).open();
 			})
 		);
+		// Hidden while colour coding is switched off globally -- a picker whose
+		// every choice is invisible is worse than no picker.
+		if (this.store.settings.colorCoding) {
+			menu.addItem((item) =>
+				item.setTitle('Colour').setIcon('palette').onClick(() => this.showColorMenu(node, evt))
+			);
+		}
 		menu.addSeparator();
 		menu.addItem((item) =>
 			item.setTitle('Delete section').setIcon('trash').onClick(() => {
@@ -737,6 +825,13 @@ export class TabSpacesView extends ItemView {
 				).open();
 			})
 		);
+		// Hidden while colour coding is switched off globally -- a picker whose
+		// every choice is invisible is worse than no picker.
+		if (this.store.settings.colorCoding) {
+			menu.addItem((item) =>
+				item.setTitle('Colour').setIcon('palette').onClick(() => this.showColorMenu(node, evt))
+			);
+		}
 		menu.addSeparator();
 		menu.addItem((item) =>
 			item.setTitle('Delete permanently').setIcon('trash').onClick(() => void this.deleteNode(node))

@@ -30,12 +30,24 @@ module.exports = __toCommonJS(main_exports);
 var import_obsidian6 = require("obsidian");
 
 // src/types.ts
+var COLOR_SLOTS = ["blue", "purple", "green", "orange", "cyan", "pink", "yellow", "red"];
+var COLOR_LABELS = {
+  blue: "Blue",
+  purple: "Purple",
+  green: "Green",
+  orange: "Orange",
+  cyan: "Cyan",
+  pink: "Pink",
+  yellow: "Yellow",
+  red: "Red"
+};
 var COMPLETED_PARENT_ID = "__completed__";
 var DEFAULT_SETTINGS = {
   confirmBeforeComplete: true,
   defaultOpenBehavior: { mode: "tab" },
   titleOverflow: "truncate",
-  hideTabHeaders: false
+  hideTabHeaders: false,
+  colorCoding: true
 };
 var DEFAULT_DATA = {
   items: [],
@@ -65,6 +77,92 @@ var TabSpacesStore = class {
       if (item.parentId === LEGACY_UNSORTED_PARENT_ID)
         item.parentId = null;
     }
+    for (const item of this.data.items) {
+      if ((item.type === "group" || item.type === "section") && !item.autoColor) {
+        item.autoColor = this.pickAutoColor();
+      }
+    }
+  }
+  /**
+   * Hands out the least-used slot, so a handful of groups and sections come
+   * out visibly different instead of the rotation doubling back early.
+   *
+   * Groups and sections share one rotation rather than counting separately:
+   * a section's stripe and a root-level group's stripe show up side by side
+   * in the same workspace, so letting each type restart the rotation would
+   * reliably hand the first section the same colour as the first group --
+   * exactly the collision the feature exists to prevent.
+   *
+   * Counts `autoColor` only: an explicit user choice shouldn't push the
+   * automatic rotation around.
+   */
+  pickAutoColor() {
+    var _a, _b, _c;
+    const used = new Map(COLOR_SLOTS.map((slot) => [slot, 0]));
+    for (const node of this.data.items) {
+      if (!node.autoColor)
+        continue;
+      used.set(node.autoColor, ((_a = used.get(node.autoColor)) != null ? _a : 0) + 1);
+    }
+    let best = COLOR_SLOTS[0];
+    for (const slot of COLOR_SLOTS) {
+      if (((_b = used.get(slot)) != null ? _b : 0) < ((_c = used.get(best)) != null ? _c : 0))
+        best = slot;
+    }
+    return best;
+  }
+  /**
+   * The colour a group/section actually displays, resolved in this order:
+   * the node's own explicit pick, then whatever its section resolves to
+   * (recursively, so a section nested in a section still follows), then its
+   * own auto-assigned slot.
+   *
+   * Inheritance living here -- rather than being copied onto each group when
+   * it's filed -- is what makes drag-into-a-section adopt the section colour
+   * with no move-time bookkeeping at all, and drag-back-out restore the
+   * group's own. Nothing has to notice the move; the answer is just derived
+   * fresh each time it's asked for.
+   */
+  effectiveColor(node) {
+    if (!this.data.settings.colorCoding)
+      return void 0;
+    if (node.type !== "group" && node.type !== "section")
+      return void 0;
+    if (node.color)
+      return node.color === "none" ? void 0 : node.color;
+    const parent = node.parentId ? this.find(node.parentId) : void 0;
+    if ((parent == null ? void 0 : parent.type) === "section")
+      return this.effectiveColor(parent);
+    return node.autoColor;
+  }
+  /** `color: undefined` is "Automatic" -- back to inheriting from the section
+   * (or to this node's own auto-assigned slot when it isn't in one).
+   * `'none'` is the explicit opt-out, which inheritance can't override. */
+  async setColor(id, color) {
+    const node = this.find(id);
+    if (!node || node.type !== "group" && node.type !== "section")
+      return;
+    node.color = color;
+    await this.save();
+    this.notify();
+  }
+  /** Drops every explicit colour inside a section, so groups that had been
+   * individually recoloured fall back to following the section again. The
+   * "make this whole section one colour" escape hatch, kept as its own
+   * deliberate action rather than a side effect of setting the section's
+   * colour -- which would silently discard per-group choices. */
+  async clearChildColors(sectionId) {
+    let changed = false;
+    for (const child of this.children(sectionId)) {
+      if (child.color === void 0)
+        continue;
+      child.color = void 0;
+      changed = true;
+    }
+    if (!changed)
+      return;
+    await this.save();
+    this.notify();
   }
   async save() {
     await this.plugin.saveData(this.data);
@@ -116,7 +214,8 @@ var TabSpacesStore = class {
       title,
       parentId,
       order: this.nextOrder(parentId),
-      collapsed: false
+      collapsed: false,
+      autoColor: this.pickAutoColor()
     };
     this.data.items.push(node);
     await this.save();
@@ -131,7 +230,8 @@ var TabSpacesStore = class {
       parentId,
       order: this.nextOrder(parentId),
       collapsed: false,
-      openBehavior: { ...openBehavior }
+      openBehavior: { ...openBehavior },
+      autoColor: this.pickAutoColor()
     };
     this.data.items.push(node);
     await this.save();
@@ -322,13 +422,19 @@ var TabSpacesStore = class {
    * different group, and moving a group into/out of a section are all just
    * this one operation -- no special-casing needed.
    */
-  async moveInto(id, newParentId, index) {
+  async moveInto(id, newParentId, index, options = {}) {
+    var _a;
     const node = this.find(id);
     if (!node)
       return;
     if (newParentId && (newParentId === id || this.isDescendantOf(newParentId, id)))
       return;
+    const previousParentId = node.parentId;
+    const newParent = newParentId ? this.find(newParentId) : void 0;
     node.parentId = newParentId;
+    if (((_a = options.adoptSectionColor) != null ? _a : true) && node.type === "group" && node.color !== void 0 && newParentId !== previousParentId && (newParent == null ? void 0 : newParent.type) === "section") {
+      node.color = void 0;
+    }
     const siblings = this.children(newParentId).filter((s) => s.id !== id);
     siblings.splice(Math.max(0, Math.min(index, siblings.length)), 0, node);
     siblings.forEach((s, i) => {
@@ -361,7 +467,7 @@ var TabSpacesStore = class {
       return;
     const target = node.lastParentId && this.find(node.lastParentId) ? node.lastParentId : null;
     node.completedAt = void 0;
-    await this.moveInto(id, target, this.children(target).length);
+    await this.moveInto(id, target, this.children(target).length, { adoptSectionColor: false });
   }
 };
 
@@ -374,6 +480,13 @@ function titleFromPath(path) {
   var _a;
   const base = (_a = path.split("/").pop()) != null ? _a : path;
   return base.replace(/\.[^./]+$/, "") || base;
+}
+function isBlankTab(tab) {
+  var _a;
+  if (tab.filePath)
+    return false;
+  const type = (_a = tab.viewState) == null ? void 0 : _a.type;
+  return !type || type === "empty";
 }
 var LeafSync = class {
   constructor(plugin, store) {
@@ -541,13 +654,22 @@ var LeafSync = class {
       }
       await this.store.setHomeLeaf(node.id, void 0);
       for (const tab of this.store.children(node.id)) {
-        if (!tab.done)
+        if (!tab.done && isBlankTab(tab))
           await this.store.remove(tab.id);
       }
       if (this.store.children(node.id).length === 0)
         await this.store.remove(node.id);
     }
     const claimedContainers = /* @__PURE__ */ new Map();
+    for (const node of this.store.items) {
+      if (node.type !== "group" || !node.homeLeafId)
+        continue;
+      const leaf = this.workspace.getLeafById(node.homeLeafId);
+      if (!leaf)
+        continue;
+      claimedContainers.set(leaf.parent, node.id);
+      this.applyAccent(node);
+    }
     for (const node of this.store.items) {
       if (node.type !== "group" || node.homeLeafId)
         continue;
@@ -559,18 +681,12 @@ var LeafSync = class {
         continue;
       const first = leaves[0];
       const firstId = getLeafId(first);
-      if (!firstId)
+      if (!firstId || claimedContainers.has(first.parent))
         continue;
       await this.store.setHomeLeaf(node.id, firstId);
       this.applyHiddenClass(node);
+      this.applyAccent(node);
       claimedContainers.set(first.parent, node.id);
-    }
-    for (const node of this.store.items) {
-      if (node.type !== "group" || !node.homeLeafId)
-        continue;
-      const leaf = this.workspace.getLeafById(node.homeLeafId);
-      if (leaf)
-        claimedContainers.set(leaf.parent, node.id);
     }
     for (const [container, groupId] of claimedContainers) {
       if (this.openingGroups.has(groupId))
@@ -636,6 +752,52 @@ var LeafSync = class {
     const leaf = this.workspace.getLeafById(group.homeLeafId);
     const tabsEl = leaf == null ? void 0 : leaf.view.containerEl.closest(".workspace-tabs");
     tabsEl == null ? void 0 : tabsEl.toggleClass("working-tabs-hidden-pane", this.isEffectivelyHidden(group));
+  }
+  /**
+   * Colour coding's half of the same mechanism: reaches the group's pane the
+   * exact same way applyHiddenClass does, and sets a custom property that
+   * styles.css turns into a stripe down the pane's leading edge. Nothing but
+   * a property write from here -- the stripe itself is declarative, so it
+   * can't drift out of sync with the DOM.
+   *
+   * The edge is deliberately not the tab-header row: the "Hide tab bar"
+   * setting deletes that row outright (see styles.css), and an accent that
+   * vanishes for the people leaning hardest on this sidebar would be the
+   * wrong half of the feature to lose.
+   *
+   * Always set *or* clear, never set-only: panes get recycled between groups
+   * as they open and close, and a stripe left behind would claim a pane still
+   * belongs to a group that has since moved out of it.
+   */
+  applyAccent(group) {
+    if (!group.homeLeafId)
+      return;
+    const leaf = this.workspace.getLeafById(group.homeLeafId);
+    const tabsEl = leaf == null ? void 0 : leaf.view.containerEl.closest(".workspace-tabs");
+    if (!tabsEl)
+      return;
+    const slot = this.store.effectiveColor(group);
+    const next = slot ? `var(--working-tabs-color-${slot})` : "";
+    if (tabsEl.style.getPropertyValue("--working-tabs-accent") === next)
+      return;
+    if (slot) {
+      tabsEl.style.setProperty("--working-tabs-accent", next);
+      tabsEl.addClass("working-tabs-accented");
+    } else {
+      tabsEl.style.removeProperty("--working-tabs-accent");
+      tabsEl.removeClass("working-tabs-accented");
+    }
+  }
+  /** Re-asserts every live group's stripe. Driven off the store's change
+   * event (see main.ts) because so many different edits change what a pane
+   * should be showing -- picking a colour, dragging a group into or out of a
+   * section, recolouring the section itself, completing a group -- and every
+   * one of them already goes through the store. */
+  refreshAccents() {
+    for (const node of this.store.items) {
+      if (node.type === "group" && node.homeLeafId)
+        this.applyAccent(node);
+    }
   }
   async toggleGroupHidden(id) {
     await this.store.toggleHidden(id);
@@ -1102,6 +1264,13 @@ var GroupDescriptionModal = class extends import_obsidian3.Modal {
 };
 
 // src/views/TabSpacesView.ts
+function colorMenuTitle(slot) {
+  const frag = createFragment();
+  const swatch = frag.createSpan({ cls: "working-tabs-swatch" });
+  swatch.style.setProperty("--working-tabs-accent", `var(--working-tabs-color-${slot})`);
+  frag.createSpan({ text: COLOR_LABELS[slot] });
+  return frag;
+}
 var PANE_DROP_CLASSES = [
   "working-tabs-pane-drop-top",
   "working-tabs-pane-drop-bottom",
@@ -1261,6 +1430,11 @@ var TabSpacesView = class extends import_obsidian4.ItemView {
       attr: { "data-node-id": node.id, style: `padding-left: ${8 + depth * 16}px`, draggable: "true" }
     });
     this.wireDrag(row, node);
+    const slot = this.store.effectiveColor(node);
+    if (slot) {
+      row.addClass("working-tabs-colored");
+      row.style.setProperty("--working-tabs-accent", `var(--working-tabs-color-${slot})`);
+    }
     this.visibleOrder.push(node.id);
     if (node.id === this.focusedId)
       row.addClass("is-focused");
@@ -1685,6 +1859,37 @@ var TabSpacesView = class extends import_obsidian4.ItemView {
       this.startRename(titleEl, section);
   }
   // ── Context menus ────────────────────────────────────────
+  /**
+   * Opened from the "Colour" item on a group or section menu. A second Menu
+   * rather than a submenu: `MenuItem.setSubmenu` isn't in the public API for
+   * the versions this plugin supports, and reaching past the typings for a
+   * nested menu isn't worth it when reopening at the same point costs one
+   * click and can't break.
+   */
+  showColorMenu(node, evt) {
+    const menu = new import_obsidian4.Menu();
+    menu.setUseNativeMenu(false);
+    const parent = node.parentId ? this.store.find(node.parentId) : void 0;
+    const inSection = node.type === "group" && (parent == null ? void 0 : parent.type) === "section";
+    for (const slot of COLOR_SLOTS) {
+      menu.addItem(
+        (item) => item.setTitle(colorMenuTitle(slot)).setChecked(node.color === slot).onClick(() => void this.store.setColor(node.id, slot))
+      );
+    }
+    menu.addSeparator();
+    menu.addItem(
+      (item) => item.setTitle(inSection ? "Use section colour" : "Automatic").setIcon("rotate-ccw").setChecked(!node.color).onClick(() => void this.store.setColor(node.id, void 0))
+    );
+    menu.addItem(
+      (item) => item.setTitle("No colour").setIcon("ban").setChecked(node.color === "none").onClick(() => void this.store.setColor(node.id, "none"))
+    );
+    if (node.type === "section" && this.store.children(node.id).some((child) => child.color)) {
+      menu.addItem(
+        (item) => item.setTitle("Reset group colours").setIcon("paintbrush").onClick(() => void this.store.clearChildColors(node.id))
+      );
+    }
+    menu.showAtMouseEvent(evt);
+  }
   showSectionMenu(node, evt) {
     const menu = new import_obsidian4.Menu();
     menu.addItem(
@@ -1708,6 +1913,11 @@ var TabSpacesView = class extends import_obsidian4.ItemView {
         ).open();
       })
     );
+    if (this.store.settings.colorCoding) {
+      menu.addItem(
+        (item) => item.setTitle("Colour").setIcon("palette").onClick(() => this.showColorMenu(node, evt))
+      );
+    }
     menu.addSeparator();
     menu.addItem(
       (item) => item.setTitle("Delete section").setIcon("trash").onClick(() => {
@@ -1754,6 +1964,11 @@ var TabSpacesView = class extends import_obsidian4.ItemView {
         ).open();
       })
     );
+    if (this.store.settings.colorCoding) {
+      menu.addItem(
+        (item) => item.setTitle("Colour").setIcon("palette").onClick(() => this.showColorMenu(node, evt))
+      );
+    }
     menu.addSeparator();
     menu.addItem(
       (item) => item.setTitle("Delete permanently").setIcon("trash").onClick(() => void this.deleteNode(node))
@@ -2030,6 +2245,11 @@ var TabSpacesSettingTab = class extends import_obsidian5.PluginSettingTab {
         }
       },
       {
+        name: "Colour code groups and sections",
+        desc: "Give every group and section a colour, shown as a stripe down its pane and a matching bar in the sidebar. Groups follow their section unless you set one yourself. Turning this off hides every stripe without forgetting the colours you picked.",
+        control: { type: "toggle", key: "colorCoding" }
+      },
+      {
         name: "Hide tab bar",
         desc: `Hide Obsidian's native tab-header row across every pane, for a cleaner view. Since that row is also where the native "+" button lives, use each group's "new tab" menu item to open a blank tab instead.`,
         control: { type: "toggle", key: "hideTabHeaders" }
@@ -2060,6 +2280,13 @@ var TabSpacesSettingTab = class extends import_obsidian5.PluginSettingTab {
         await this.plugin.store.updateSettings({ titleOverflow: value });
       });
     });
+    new import_obsidian5.Setting(containerEl).setName("Colour code groups and sections").setDesc(
+      "Give every group and section a colour, shown as a stripe down its pane and a matching bar in the sidebar. Groups follow their section unless you set one yourself. Turning this off hides every stripe without forgetting the colours you picked."
+    ).addToggle(
+      (toggle) => toggle.setValue(this.plugin.store.settings.colorCoding).onChange(async (value) => {
+        await this.plugin.store.updateSettings({ colorCoding: value });
+      })
+    );
     new import_obsidian5.Setting(containerEl).setName("Hide tab bar").setDesc(
       `Hide Obsidian's native tab-header row across every pane, for a cleaner view. Since that row is also where the native "+" button lives, use each group's "new tab" menu item to open a blank tab instead.`
     ).addToggle(
@@ -2078,7 +2305,12 @@ var TabSpacesPlugin = class extends import_obsidian6.Plugin {
     this.leafSync = new LeafSync(this, this.store);
     this.leafSync.start();
     this.applyHideTabHeaders();
-    this.register(this.store.onChange(() => this.applyHideTabHeaders()));
+    this.register(
+      this.store.onChange(() => {
+        this.applyHideTabHeaders();
+        this.leafSync.refreshAccents();
+      })
+    );
     this.registerView(VIEW_TYPE_WORKING_TABS, (leaf) => new TabSpacesView(leaf, this));
     this.addRibbonIcon("layout-panel-left", "Open working tabs", () => void this.activateView());
     this.addCommand({

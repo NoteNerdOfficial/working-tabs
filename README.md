@@ -2,6 +2,10 @@
 
 Your open tabs, organized by what you're working on *right now* — not by folder, and not by layout. Inspired by Workona, built for Obsidian.
 
+<p align="center">
+  <img src="docs/colour-coding.gif" width="820" alt="The Working tabs sidebar beside three Obsidian panes. Each group carries a colour, drawn as a stripe down its pane's left edge and a matching bar on its sidebar row. A colour is picked from the group menu, then a new section is created and a group dragged into it, which takes on the section's colour.">
+</p>
+
 ## Why
 
 Arranging *how* open tabs render — columns, continuous scroll, and the like — is a layout problem. It doesn't solve the actual one: **you have twelve tabs open across three panes and no way to say "these six belong together, tuck them away, and give me back my screen."**
@@ -30,7 +34,15 @@ Hiding matters here specifically because it doesn't close anything — the pane 
 - **Open in...** split right, split down, new window, or new tab — matching Obsidian's own placement vocabulary. Opening into an already-occupied pane merges the two groups together.
 - Rename inline (double-click or F2) and add an optional description shown under the title.
 - **Hide a group** to tuck its pane away without closing it — the tabs stay open in the background, just out of view, and unhiding brings them right back.
+- **Colour coding** ties a pane to its place in the sidebar: every group and section is auto-assigned a colour, drawn as a stripe down the pane's left edge and a matching bar on the sidebar row. Groups follow their section's colour, so filing a group into a section adopts it — even one you'd recoloured by hand — and dragging it back out restores its own. Pick "Colour" on any group or section to override, "No colour" to opt one out, or "Automatic" to go back to following along. Turn the whole thing off in settings without losing the colours you picked.
+- **Closing a pane never deletes its group** — whether you use the sidebar's "Close group" or Obsidian's own tab-strip menu ("Close all", closing the last tab, closing the split), the group just goes dormant with its tab list intact, ready to reopen. Deleting it is always a deliberate choice.
 - **Complete a group** when the work is done: its pane closes, but the group and its tab list move to Completed, fully restorable later. A per-tab "done" checkbox lets you check off individual tabs without completing the whole group.
+
+<p align="center">
+  <img src="docs/demo-sidebar.gif" width="330" alt="The sidebar panel. Three tabs are checked off one by one, each striking through and dropping to the bottom of its group; with all three done the group leaves the list and lands under Completed. A new section is then created, renamed, and groups are dragged into it.">
+  <br>
+  <em>Check tabs off as you finish them — the group completes itself and moves to Completed. Sections keep what's left filed by timeframe.</em>
+</p>
 
 ### Sections
 - Fold related groups together under one collapsible header — by timeframe, sprint, or whatever grouping makes sense for how you work.
@@ -57,6 +69,7 @@ Hiding matters here specifically because it doesn't close anything — the pane 
 |---|---|
 | Confirm before completing a group | Ask before marking a group done. Turn off once you trust it — completed groups can still be restored |
 | Long titles | Truncate titles and descriptions with an ellipsis, or wrap them to multiple lines |
+| Colour code groups and sections | Show each group's colour as a stripe on its pane and a bar in the sidebar. Off hides every stripe without forgetting your picks |
 | Hide tab bar | Hide Obsidian's native tab-header row across every pane, for a cleaner look |
 
 ## Installation

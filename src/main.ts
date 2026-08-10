@@ -17,7 +17,12 @@ export default class TabSpacesPlugin extends Plugin {
 		this.leafSync.start();
 
 		this.applyHideTabHeaders();
-		this.register(this.store.onChange(() => this.applyHideTabHeaders()));
+		this.register(
+			this.store.onChange(() => {
+				this.applyHideTabHeaders();
+				this.leafSync.refreshAccents();
+			})
+		);
 
 		this.registerView(VIEW_TYPE_WORKING_TABS, (leaf) => new TabSpacesView(leaf, this));
 

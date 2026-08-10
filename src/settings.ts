@@ -33,6 +33,11 @@ export class TabSpacesSettingTab extends PluginSettingTab {
 				},
 			},
 			{
+				name: 'Colour code groups and sections',
+				desc: 'Give every group and section a colour, shown as a stripe down its pane and a matching bar in the sidebar. Groups follow their section unless you set one yourself. Turning this off hides every stripe without forgetting the colours you picked.',
+				control: { type: 'toggle', key: 'colorCoding' },
+			},
+			{
 				name: 'Hide tab bar',
 				desc: "Hide Obsidian's native tab-header row across every pane, for a cleaner view. Since that row is also where the native \"+\" button lives, use each group's \"new tab\" menu item to open a blank tab instead.",
 				control: { type: 'toggle', key: 'hideTabHeaders' },
@@ -73,6 +78,17 @@ export class TabSpacesSettingTab extends PluginSettingTab {
 					await this.plugin.store.updateSettings({ titleOverflow: value as TitleOverflow });
 				});
 			});
+
+		new Setting(containerEl)
+			.setName('Colour code groups and sections')
+			.setDesc(
+				'Give every group and section a colour, shown as a stripe down its pane and a matching bar in the sidebar. Groups follow their section unless you set one yourself. Turning this off hides every stripe without forgetting the colours you picked.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.store.settings.colorCoding).onChange(async (value) => {
+					await this.plugin.store.updateSettings({ colorCoding: value });
+				})
+			);
 
 		new Setting(containerEl)
 			.setName('Hide tab bar')

@@ -1,5 +1,37 @@
 export type NodeType = 'section' | 'group' | 'tab';
 
+/**
+ * Colour-coding palette. Stored as a slot id, never a hex -- every slot maps to
+ * a CSS custom property (see styles.css), which in turn defers to Obsidian's own
+ * `--color-*` variables, so a colour picked in a dark theme stays right after
+ * switching to a light one. A stored hex would be frozen to whichever theme
+ * happened to be active when it was chosen.
+ *
+ * Order matters: it's the rotation auto-assignment walks (see
+ * TabSpacesStore.pickAutoColor), so the first few slots are the ones most
+ * people will actually see.
+ */
+export const COLOR_SLOTS = ['blue', 'purple', 'green', 'orange', 'cyan', 'pink', 'yellow', 'red'] as const;
+
+export type ColorSlot = (typeof COLOR_SLOTS)[number];
+
+/** What a group/section can be set to. The `'none'` sentinel is deliberately
+ * distinct from leaving `color` unset: unset means "inherit" (follow my
+ * section, or fall back to my auto-assigned slot), while `'none'` is an
+ * explicit "show no colour at all" that a section's colour can't override. */
+export type ColorChoice = ColorSlot | 'none';
+
+export const COLOR_LABELS: Record<ColorSlot, string> = {
+	blue: 'Blue',
+	purple: 'Purple',
+	green: 'Green',
+	orange: 'Orange',
+	cyan: 'Cyan',
+	pink: 'Pink',
+	yellow: 'Yellow',
+	red: 'Red',
+};
+
 export type PaneType = 'tab' | 'split' | 'window';
 
 export interface OpenBehavior {
@@ -36,6 +68,28 @@ export interface SpaceNode {
 	 * under it is treated as hidden too, regardless of that group's own flag
 	 * -- see LeafSync.isEffectivelyHidden. */
 	hidden?: boolean;
+
+	/** Groups and sections -- the colour the user explicitly picked. Absent
+	 * means "inherit", which is the default state: a group filed under a
+	 * section shows that section's colour, so dragging a group in adopts the
+	 * section instantly and dragging it out returns it to its own.
+	 *
+	 * An explicit colour outranks inheritance but is *not* permanent: filing a
+	 * group into a section clears it, so the group joins the section's colour
+	 * rather than sitting inside it looking unrelated (see
+	 * TabSpacesStore.moveInto). It survives reordering within a section, and
+	 * survives being completed and restored.
+	 *
+	 * `'none'` is an explicit "no colour at all" that a section can't override.
+	 * See TabSpacesStore.effectiveColor for the full resolution order. */
+	color?: ColorChoice;
+	/** Groups and sections -- the slot handed out automatically at creation, so
+	 * colour coding works without anyone opening a menu. Only consulted once
+	 * nothing above it in the chain has an explicit `color`, which is why a
+	 * group's own autoColor stays dormant for as long as it lives in a
+	 * section. Never shown to the user as a choice; picking any colour writes
+	 * `color` instead, and "Automatic" clears that to fall back here. */
+	autoColor?: ColorSlot;
 
 	/** Tabs only -- internal matching key used by reconcile to tell "same tab, still
 	 * open" apart from "closed". Equals filePath for note/file tabs (stable across
@@ -79,6 +133,12 @@ export interface TabSpacesSettings {
 	/** Hides Obsidian's native tab-header row globally -- pairs with the "New tab"
 	 * group-menu item, since that row is also where the native "+" button lives. */
 	hideTabHeaders: boolean;
+	/** Master switch for colour coding. Off suppresses every stripe and swatch
+	 * without touching a single stored colour, so turning it back on restores
+	 * exactly what was set before -- and it spares anyone who doesn't want the
+	 * feature from setting "No colour" on every group forever, only for the
+	 * next auto-assigned one to arrive coloured anyway. */
+	colorCoding: boolean;
 }
 
 export interface TabSpacesData {
@@ -91,6 +151,7 @@ export const DEFAULT_SETTINGS: TabSpacesSettings = {
 	defaultOpenBehavior: { mode: 'tab' },
 	titleOverflow: 'truncate',
 	hideTabHeaders: false,
+	colorCoding: true,
 };
 
 export const DEFAULT_DATA: TabSpacesData = {
